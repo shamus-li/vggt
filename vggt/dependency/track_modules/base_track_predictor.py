@@ -141,7 +141,12 @@ class BaseTrackerPredictor(nn.Module):
 
             # 2D positional embed
             # TODO: this can be much simplified
-            pos_embed = get_2d_sincos_pos_embed(self.transformer_dim, grid_size=(HH, WW)).to(query_points.device)
+            pos_embed = get_2d_sincos_pos_embed(
+                self.transformer_dim,
+                grid_size=(HH, WW),
+                dtype=track_feats.dtype,
+                device=query_points.device,
+            )
             sampled_pos_emb = sample_features4d(pos_embed.expand(B, -1, -1, -1), coords[:, 0])
             sampled_pos_emb = rearrange(sampled_pos_emb, "b n c -> (b n) c").unsqueeze(1)
 

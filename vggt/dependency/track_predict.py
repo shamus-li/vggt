@@ -8,7 +8,7 @@ import torch
 import numpy as np
 from .vggsfm_utils import *
 
-
+@torch.no_grad()
 def predict_tracks(
     images,
     conf=None,
@@ -53,7 +53,9 @@ def predict_tracks(
 
     device = images.device
     dtype = images.dtype
-    tracker = build_vggsfm_tracker().to(device, dtype)
+
+    tracker = build_vggsfm_tracker().to(device=device, dtype=dtype)
+    images = images.to(device=device, dtype=dtype)
 
     # Find query frames
     query_frame_indexes = generate_rank_by_dino(images, query_frame_num=query_frame_num, device=device)
@@ -131,7 +133,7 @@ def predict_tracks(
 
     return pred_tracks, pred_vis_scores, pred_confs, pred_points_3d, pred_colors
 
-
+@torch.no_grad()
 def _forward_on_query(
     query_index,
     images,
@@ -175,7 +177,14 @@ def _forward_on_query(
     # Extract the color at the keypoint locations
     query_points_long = query_points.squeeze(0).round().long()
     pred_color = images[query_index][:, query_points_long[:, 1], query_points_long[:, 0]]
-    pred_color = (pred_color.permute(1, 0).cpu().numpy() * 255).astype(np.uint8)
+    pred_color = (
+        pred_color.permute(1, 0)
+        .detach()
+        .cpu()
+        .to(torch.float32)
+        .numpy()
+    )
+    pred_color = (pred_color * 255).astype(np.uint8)
 
     # Query the confidence and points_3d at the keypoint locations
     if (conf is not None) and (points_3d is not None):
@@ -223,12 +232,24 @@ def _forward_on_query(
 
     pred_track, pred_vis = switch_tensor_order([pred_track, pred_vis], reorder_index, dim=1)
 
-    pred_track = pred_track.squeeze(0).float().cpu().numpy()
-    pred_vis = pred_vis.squeeze(0).float().cpu().numpy()
+    pred_track = (
+        pred_track.squeeze(0)
+        .detach()
+        .cpu()
+        .to(torch.float32)
+        .numpy()
+    )
+    pred_vis = (
+        pred_vis.squeeze(0)
+        .detach()
+        .cpu()
+        .to(torch.float32)
+        .numpy()
+    )
 
     return pred_track, pred_vis, pred_conf, pred_point_3d, pred_color
 
-
+@torch.no_grad()
 def _augment_non_visible_frames(
     pred_tracks: list,  # ← running list of np.ndarrays
     pred_vis_scores: list,  # ← running list of np.ndarrays

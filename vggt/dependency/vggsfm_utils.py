@@ -238,8 +238,9 @@ def extract_keypoints(query_image, extractors, round_keypoints=True):
     query_points = None
 
     with torch.no_grad():
+        query_image_fp32 = query_image.to(dtype=torch.float32)
         for extractor_name, extractor in extractors.items():
-            query_points_data = extractor.extract(query_image, invalid_mask=None)
+            query_points_data = extractor.extract(query_image_fp32, invalid_mask=None)
             extractor_points = query_points_data["keypoints"]
             if round_keypoints:
                 extractor_points = extractor_points.round()

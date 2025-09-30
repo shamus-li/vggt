@@ -121,4 +121,4 @@ class TrackerPredictor(nn.Module):
         else:
             fmaps = self.coarse_fnet(images)
 
-        return fmaps
+        return fmaps.to(dtype=images.dtype)

@@ -8,6 +8,7 @@
 # Modified from https://github.com/facebookresearch/co-tracker/
 
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -290,9 +291,9 @@ class CorrBlock:
             corrs = self.corrs_pyramid[i]  # B, S, N, H, W
             *_, H, W = corrs.shape
 
-            dx = torch.linspace(-r, r, 2 * r + 1)
-            dy = torch.linspace(-r, r, 2 * r + 1)
-            delta = torch.stack(torch.meshgrid(dy, dx, indexing="ij"), axis=-1).to(coords.device)
+            dx = torch.linspace(-r, r, 2 * r + 1, device=coords.device, dtype=coords.dtype)
+            dy = torch.linspace(-r, r, 2 * r + 1, device=coords.device, dtype=coords.dtype)
+            delta = torch.stack(torch.meshgrid(dy, dx, indexing="ij"), axis=-1)
 
             centroid_lvl = coords.reshape(B * S * N, 1, 1, 2) / 2**i
             delta_lvl = delta.view(1, 2 * r + 1, 2 * r + 1, 2)
@@ -325,5 +326,5 @@ class CorrBlock:
                 fmap1 = targets_split[i]
             corrs = torch.matmul(fmap1, fmap2s)
             corrs = corrs.view(B, S, N, H, W)  # B S N (H W) -> B S N H W
-            corrs = corrs / torch.sqrt(torch.tensor(C).float())
+            corrs = corrs / math.sqrt(C)
             self.corrs_pyramid.append(corrs)

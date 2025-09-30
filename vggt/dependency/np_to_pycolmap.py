@@ -74,6 +74,11 @@ def batch_np_matrix_to_pycolmap(
 
     # Reconstruction object, following the format of PyCOLMAP/COLMAP
     reconstruction = pycolmap.Reconstruction()
+    rig_cache = {}
+    sensor_cache = {}
+
+    rig_cache = {}
+    sensor_cache = {}
 
     inlier_num = masks.sum(0)
     valid_mask = inlier_num >= 2  # a track is invalid if without two inliers
@@ -86,6 +91,8 @@ def batch_np_matrix_to_pycolmap(
         reconstruction.add_point3D(points3d[vidx], pycolmap.Track(), rgb)
 
     num_points3D = len(valid_idx)
+    rig_cache = {}
+    sensor_cache = {}
     camera = None
     # frame idx
     for fidx in range(N):
@@ -104,10 +111,26 @@ def batch_np_matrix_to_pycolmap(
         cam_from_world = pycolmap.Rigid3d(
             pycolmap.Rotation3d(extrinsics[fidx][:3, :3]), extrinsics[fidx][:3, 3]
         )  # Rot and Trans
+        sensor_id = camera.camera_id
+        if sensor_id not in rig_cache:
+            rig = pycolmap.Rig(dict(rig_id=sensor_id))
+            sensor = pycolmap.sensor_t(type=pycolmap.SensorType.CAMERA, id=sensor_id)
+            rig.add_ref_sensor(sensor)
+            reconstruction.add_rig(rig)
+            rig_cache[sensor_id] = reconstruction.rig(sensor_id)
+            sensor_cache[sensor_id] = sensor
+        rig = rig_cache[sensor_id]
+        sensor = sensor_cache[sensor_id]
 
-        image = pycolmap.Image(
-            id=fidx + 1, name=f"image_{fidx + 1}", camera_id=camera.camera_id, cam_from_world=cam_from_world
-        )
+        frame_id = fidx + 1
+        frame = pycolmap.Frame(dict(frame_id=frame_id, rig_id=rig.rig_id, rig=rig))
+        data_id = pycolmap.data_t(sensor_id=sensor, id=frame_id)
+        frame.add_data_id(data_id)
+        frame.set_cam_from_world(sensor.id, cam_from_world)
+        reconstruction.add_frame(frame)
+
+        image = pycolmap.Image(name=f"image_{fidx + 1}", camera_id=camera.camera_id, image_id=fidx + 1)
+        image.frame_id = frame_id
 
         points2D_list = []
 
@@ -133,11 +156,10 @@ def batch_np_matrix_to_pycolmap(
         assert point2D_idx == len(points2D_list)
 
         try:
-            image.points2D = pycolmap.ListPoint2D(points2D_list)
-            image.registered = True
-        except:
+            image.points2D = points2D_list
+        except Exception:
             print(f"frame {fidx + 1} is out of BA")
-            image.registered = False
+            image.points2D = []
 
         # add image
         reconstruction.add_image(image)
@@ -234,6 +256,8 @@ def batch_np_matrix_to_pycolmap_wo_track(
     for vidx in range(P):
         reconstruction.add_point3D(points3d[vidx], pycolmap.Track(), points_rgb[vidx])
 
+    rig_cache = {}
+    sensor_cache = {}
     camera = None
     # frame idx
     for fidx in range(N):
@@ -253,9 +277,26 @@ def batch_np_matrix_to_pycolmap_wo_track(
             pycolmap.Rotation3d(extrinsics[fidx][:3, :3]), extrinsics[fidx][:3, 3]
         )  # Rot and Trans
 
-        image = pycolmap.Image(
-            id=fidx + 1, name=f"image_{fidx + 1}", camera_id=camera.camera_id, cam_from_world=cam_from_world
-        )
+        sensor_id = camera.camera_id
+        if sensor_id not in rig_cache:
+            rig = pycolmap.Rig(dict(rig_id=sensor_id))
+            sensor = pycolmap.sensor_t(type=pycolmap.SensorType.CAMERA, id=sensor_id)
+            rig.add_ref_sensor(sensor)
+            reconstruction.add_rig(rig)
+            rig_cache[sensor_id] = reconstruction.rig(sensor_id)
+            sensor_cache[sensor_id] = sensor
+        rig = rig_cache[sensor_id]
+        sensor = sensor_cache[sensor_id]
+
+        frame_id = fidx + 1
+        frame = pycolmap.Frame(dict(frame_id=frame_id, rig_id=rig.rig_id, rig=rig))
+        data_id = pycolmap.data_t(sensor_id=sensor, id=frame_id)
+        frame.add_data_id(data_id)
+        frame.set_cam_from_world(sensor.id, cam_from_world)
+        reconstruction.add_frame(frame)
+
+        image = pycolmap.Image(name=f"image_{fidx + 1}", camera_id=camera.camera_id, image_id=fidx + 1)
+        image.frame_id = frame_id
 
         points2D_list = []
 
@@ -278,11 +319,10 @@ def batch_np_matrix_to_pycolmap_wo_track(
         assert point2D_idx == len(points2D_list)
 
         try:
-            image.points2D = pycolmap.ListPoint2D(points2D_list)
-            image.registered = True
-        except:
+            image.points2D = points2D_list
+        except Exception:
             print(f"frame {fidx + 1} does not have any points")
-            image.registered = False
+            image.points2D = []
 
         # add image
         reconstruction.add_image(image)
