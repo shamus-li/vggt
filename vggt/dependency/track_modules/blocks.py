@@ -263,7 +263,7 @@ class EfficientUpdateFormer(nn.Module):
 
 
 class CorrBlock:
-    def __init__(self, fmaps, num_levels=4, radius=4, multiple_track_feats=False, padding_mode="zeros"):
+    def __init__(self, fmaps, num_levels=4, radius=4, multiple_track_feats=False, padding_mode="zeros", lazy_pyramid=True):
         B, S, C, H, W = fmaps.shape
         self.S, self.C, self.H, self.W = S, C, H, W
         self.padding_mode = padding_mode
@@ -271,14 +271,22 @@ class CorrBlock:
         self.radius = radius
         self.fmaps_pyramid = []
         self.multiple_track_feats = multiple_track_feats
+        self.lazy_pyramid = lazy_pyramid
 
-        self.fmaps_pyramid.append(fmaps)
-        for i in range(self.num_levels - 1):
-            fmaps_ = fmaps.reshape(B * S, C, H, W)
-            fmaps_ = F.avg_pool2d(fmaps_, 2, stride=2)
-            _, _, H, W = fmaps_.shape
-            fmaps = fmaps_.reshape(B, S, C, H, W)
+        if lazy_pyramid:
+            # Store only the base feature maps; build pyramid on-demand in corr()
+            # This significantly reduces peak memory usage with large sequences
+            self.fmaps_base = fmaps
+        else:
+            # Pre-compute pyramid (original behavior)
+            self.fmaps_base = None
             self.fmaps_pyramid.append(fmaps)
+            for i in range(self.num_levels - 1):
+                fmaps_ = fmaps.reshape(B * S, C, H, W)
+                fmaps_ = F.avg_pool2d(fmaps_, 2, stride=2)
+                _, _, H, W = fmaps_.shape
+                fmaps = fmaps_.reshape(B, S, C, H, W)
+                self.fmaps_pyramid.append(fmaps)
 
     def sample(self, coords):
         r = self.radius
@@ -307,7 +315,14 @@ class CorrBlock:
         out = torch.cat(out_pyramid, dim=-1).contiguous()  # B, S, N, LRR*2
         return out
 
-    def corr(self, targets):
+    def corr(self, targets, frame_chunk_size=16):
+        """
+        Compute correlations with memory-efficient frame chunking.
+
+        Args:
+            targets: Input tensor of shape [B, S, N, C]
+            frame_chunk_size: Number of frames to process at once (reduces memory usage)
+        """
         B, S, N, C = targets.shape
         if self.multiple_track_feats:
             targets_split = targets.split(C // self.num_levels, dim=-1)
@@ -318,13 +333,55 @@ class CorrBlock:
 
         fmap1 = targets
 
+        # Build pyramid on-demand if lazy_pyramid=True
+        if self.lazy_pyramid:
+            self.fmaps_pyramid = self._build_pyramid_lazy()
+
         self.corrs_pyramid = []
         for i, fmaps in enumerate(self.fmaps_pyramid):
             *_, H, W = fmaps.shape
             fmap2s = fmaps.view(B, S, C, H * W)  # B S C H W ->  B S C (H W)
             if self.multiple_track_feats:
                 fmap1 = targets_split[i]
-            corrs = torch.matmul(fmap1, fmap2s)
+
+            # Memory-efficient chunked matmul along sequence dimension
+            # Process frames in chunks to reduce peak memory usage
+            if S > frame_chunk_size:
+                corr_chunks = []
+                for s_start in range(0, S, frame_chunk_size):
+                    s_end = min(s_start + frame_chunk_size, S)
+                    fmap1_chunk = fmap1[:, s_start:s_end]  # [B, chunk_size, N, C]
+                    fmap2s_chunk = fmap2s[:, s_start:s_end]  # [B, chunk_size, C, H*W]
+                    corr_chunk = torch.matmul(fmap1_chunk, fmap2s_chunk)  # [B, chunk_size, N, H*W]
+                    corr_chunks.append(corr_chunk)
+                    # Clear cache between chunks
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                corrs = torch.cat(corr_chunks, dim=1)  # [B, S, N, H*W]
+            else:
+                corrs = torch.matmul(fmap1, fmap2s)
+
             corrs = corrs.view(B, S, N, H, W)  # B S N (H W) -> B S N H W
             corrs = corrs / math.sqrt(C)
             self.corrs_pyramid.append(corrs)
+
+        # Clear pyramid after use to free memory
+        if self.lazy_pyramid:
+            self.fmaps_pyramid = []
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    def _build_pyramid_lazy(self):
+        """Build feature pyramid on-demand from base features."""
+        B, S, C, H, W = self.fmaps_base.shape
+        pyramid = [self.fmaps_base]
+
+        fmaps = self.fmaps_base
+        for i in range(self.num_levels - 1):
+            fmaps_ = fmaps.reshape(B * S, C, H, W)
+            fmaps_ = F.avg_pool2d(fmaps_, 2, stride=2)
+            _, _, H, W = fmaps_.shape
+            fmaps = fmaps_.reshape(B, S, C, H, W)
+            pyramid.append(fmaps)
+
+        return pyramid

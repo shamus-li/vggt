@@ -101,6 +101,12 @@ def parse_args():
         help="Confidence threshold value for depth filtering (wo BA)",
     )
     parser.add_argument(
+        "--min_inlier_per_frame",
+        type=int,
+        default=64,
+        help="Minimum number of inliers required per frame during bundle adjustment",
+    )
+    parser.add_argument(
         "--stage",
         type=str,
         default="both",
@@ -281,8 +287,14 @@ def run_vggt_stage(args: argparse.Namespace) -> VGGTLoopResult:
         raise ValueError(f"No images found in {image_dir}")
     base_image_path_list = [os.path.basename(path) for path in image_path_list]
 
-    vggt_fixed_resolution = 518
-    img_load_resolution = 1024
+    vggt_fixed_resolution = int(os.environ.get("VGGT_FIXED_RES", "518"))
+    img_load_resolution = int(os.environ.get("VGGT_IMG_RES", "1024"))
+    if img_load_resolution < vggt_fixed_resolution:
+        img_load_resolution = vggt_fixed_resolution
+
+    print(
+        f"VGGT image resolution set to {img_load_resolution} (fixed={vggt_fixed_resolution})"
+    )
 
     images, original_coords = load_and_preprocess_images_square(
         image_path_list, img_load_resolution
@@ -297,6 +309,14 @@ def run_vggt_stage(args: argparse.Namespace) -> VGGTLoopResult:
     points_3d = unproject_depth_map_to_point_map(depth_map, extrinsic, intrinsic)
 
     should_predict_tracks = args.stage == "vggt" or args.use_ba
+    skip_tracks_env = os.environ.get("VGGT_SKIP_TRACKS", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if skip_tracks_env and should_predict_tracks:
+        print("Skipping VGGT track prediction (VGGT_SKIP_TRACKS enabled)")
+        should_predict_tracks = False
     pred_tracks = None
     pred_vis_scores = None
     pred_confs = None
@@ -379,6 +399,30 @@ def run_bundle_adjustment_stage(args: argparse.Namespace, vggt_result: VGGTLoopR
     intrinsic[:, :2, :] *= scale
     track_mask = pred_vis_scores > args.vis_thresh
 
+    if args.min_inlier_per_frame > 0:
+        min_per_frame = args.min_inlier_per_frame
+        # Guarantee at least min_per_frame observations per frame by selecting
+        # the highest-visibility tracks even if they fall below the threshold.
+        for frame_idx in range(track_mask.shape[0]):
+            current = track_mask[frame_idx]
+            needed = min_per_frame - int(current.sum())
+            if needed <= 0:
+                continue
+
+            scores = pred_vis_scores[frame_idx]
+            if np.all(np.isnan(scores)):
+                continue
+            order = np.argsort(np.nan_to_num(scores))
+            if order.size == 0:
+                continue
+            top_indices = order[-min_per_frame:]
+            track_mask[frame_idx, top_indices] = True
+
+    inlier_counts = track_mask.sum(axis=0)
+    if not np.any(inlier_counts >= 2):
+        print("BA WARNING: no tracks observed in >=2 frames; using dense track mask")
+        track_mask = ~np.isnan(pred_vis_scores)
+
     reconstruction, valid_track_mask = batch_np_matrix_to_pycolmap(
         tracked_points_3d,
         vggt_result.extrinsic,
@@ -390,6 +434,7 @@ def run_bundle_adjustment_stage(args: argparse.Namespace, vggt_result: VGGTLoopR
         shared_camera=shared_camera,
         camera_type=args.camera_type,
         points_rgb=points_rgb,
+        min_inlier_per_frame=args.min_inlier_per_frame,
     )
 
     if reconstruction is None:

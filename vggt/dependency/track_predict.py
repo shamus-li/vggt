@@ -247,6 +247,10 @@ def _forward_on_query(
         .numpy()
     )
 
+    # Clear GPU cache after processing each query frame to reduce memory pressure
+    if images.device.type == 'cuda':
+        torch.cuda.empty_cache()
+
     return pred_track, pred_vis, pred_conf, pred_point_3d, pred_color
 
 @torch.no_grad()
