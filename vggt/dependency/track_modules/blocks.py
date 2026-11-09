@@ -134,6 +134,8 @@ class ShallowEncoder(nn.Module):
         _, _, H, W = x.shape
 
         x = self.conv1(x)
+        # Autocast runs interpolate in float32; keep the output in the autocast dtype.
+        dtype = x.dtype
         x = self.norm1(x)
         x = self.relu1(x)
 
@@ -146,7 +148,7 @@ class ShallowEncoder(nn.Module):
 
         x = F.interpolate(x, (H // self.stride, W // self.stride), mode="bilinear", align_corners=True)
 
-        return x
+        return x.to(dtype)
 
 
 def _bilinear_intepolate(x, stride, H, W):

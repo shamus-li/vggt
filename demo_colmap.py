@@ -442,27 +442,16 @@ def run_bundle_adjustment_stage(args: argparse.Namespace, vggt_result: VGGTLoopR
 
     ba_options = pycolmap.BundleAdjustmentOptions()
     ba_use_gpu = vggt_result.device.type == "cuda"
-    if hasattr(ba_options, "use_gpu"):
-        ba_options.use_gpu = ba_use_gpu
-    if ba_use_gpu and hasattr(ba_options, "gpu_index"):
+    ba_options.ceres.use_gpu = ba_use_gpu
+    if ba_use_gpu:
         default_gpu = str(
             vggt_result.device.index if vggt_result.device.index is not None else 0
         )
         tracker_devices = getattr(args, "tracker_devices", None)
-        ba_options.gpu_index = (
+        ba_options.ceres.gpu_index = (
             tracker_devices if tracker_devices is not None else default_gpu
         )
-    try:
-        solver_options = ba_options.solver_options
-    except TypeError:
-        solver_options = None
-    if ba_use_gpu and solver_options is not None and hasattr(solver_options, "use_gpu"):
-        solver_options.use_gpu = True
-    if ba_use_gpu:
-        gpu_index_info = (
-            ba_options.gpu_index if hasattr(ba_options, "gpu_index") else "default"
-        )
-        print(f"Bundle Adjustment will run on GPU device(s): {gpu_index_info}")
+        print(f"Bundle Adjustment will run on GPU device(s): {ba_options.ceres.gpu_index}")
     else:
         print("Bundle Adjustment will run on CPU")
     pycolmap.bundle_adjustment(reconstruction, ba_options)
